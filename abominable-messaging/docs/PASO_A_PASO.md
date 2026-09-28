@@ -146,26 +146,33 @@ peso ni tocar Meta**.
 
 ## FASE 4 — n8n en Neubox (20 min) 🧑
 
-⚠️ **Antes de nada: verifica qué plan tienes.**
+**Servidor confirmado:** VPS de Neubox, 2 vCPU / 2 GB RAM / 39 GB disco,
+IP dedicada y firewall propio. Va sobrado para este workflow — ver
+`N8N_SETUP.md`, sección 0.
 
-n8n necesita Node.js corriendo permanentemente o Docker. Eso **sólo
-funciona en VPS o Cloud**, no en hosting compartido.
+Lo único a vigilar es el disco: con un trigger cada minuto, n8n acumula
+~43.000 ejecuciones al mes. Las variables de la sección siguiente
+incluyen el purgado automático que evita que la base crezca sin freno.
 
-| Plan de Neubox | ¿Sirve para n8n? |
+### 4.0 Identificar cómo está instalado n8n
+
+Antes de tocar nada, entra por SSH y averigua qué tienes:
+
+```bash
+docker ps --format '{{.Names}}\t{{.Image}}' | grep -i n8n   # Docker
+systemctl status n8n --no-pager                             # systemd
+pm2 list                                                    # pm2
+```
+
+El que responda manda: las variables de entorno se añaden en un sitio
+distinto según el caso.
+
+| Instalación | Dónde van las variables |
 |---|---|
-| Hosting compartido | ❌ No |
-| VPS / Cloud | ✅ Sí |
-
-Cómo saberlo: si entras por **SSH** y puedes correr `docker ps` o
-`node -v`, es VPS. Si sólo tienes cPanel, es compartido.
-
-**Si es compartido**, hay tres salidas, y la tercera es la que yo
-recomiendo:
-1. Subir a VPS en Neubox
-2. n8n Cloud (~€20/mes)
-3. **Contratar un VPS de $5-6/mes** (Hetzner, DigitalOcean, Contabo) —
-   sale más barato que n8n Cloud y te sirve también para los demás
-   proyectos de Abominable
+| Docker Compose | `docker-compose.yml` → `environment:` |
+| Docker `run` suelto | Recrear el contenedor con `-e` |
+| systemd | `systemctl edit n8n` → `Environment=` |
+| pm2 | `ecosystem.config.js` → `env:` |
 
 ### 4.1 Variables en el VPS
 En el `docker-compose.yml` de n8n:

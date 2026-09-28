@@ -8,20 +8,68 @@ transporte. No decide reintentos, no escribe en la base de datos y no
 tiene credenciales de Supabase. Si n8n se cae, ningún mensaje se pierde:
 siguen en `scheduled` esperando.
 
+## 0. ¿Tu servidor aguanta?
+
+Este workflow es muy ligero: una llamada por minuto y lotes de 25
+mensajes. Los requisitos reales son modestos.
+
+| Recurso | Mínimo para n8n | Cómodo |
+|---|---|---|
+| RAM | 1 GB | 2 GB |
+| CPU | 1 core | 2 cores |
+| Disco | 10 GB | 20 GB+ |
+
+Un VPS de 2 vCPU / 2 GB / 40 GB va sobrado para este caso. n8n en reposo
+ocupa entre 200 y 400 MB; el pico durante una ejecución de este workflow
+es despreciable.
+
+**Lo único que hay que vigilar es el disco.** n8n guarda cada ejecución
+en su base de datos, y con el Schedule Trigger corriendo cada minuto eso
+son ~43.000 ejecuciones al mes. Sin poda, la base crece sin parar. La
+configuración de la sección siguiente incluye el purgado automático a 7
+días, que es lo que mantiene esto estable.
+
+Un detalle que simplifica las cosas: **n8n no necesita recibir tráfico
+entrante** para este sistema. Sólo hace llamadas salientes a Vercel y a
+Meta. El webhook de WhatsApp llega a Vercel, no a n8n. Así que no hace
+falta dominio ni certificado SSL para que el scheduler funcione — sólo
+para entrar tú al panel de n8n con comodidad.
+
 ## 1. Variables de entorno en el VPS
 
 Añádelas al `docker-compose.yml` de n8n (o a su `.env`) y reinicia:
 
 ```yaml
 environment:
+  # --- Conexión con Abominable Messaging ---
   - ABOMINABLE_APP_URL=https://tu-dominio.vercel.app
   - ABOMINABLE_N8N_SECRET=<el mismo N8N_API_SECRET de la app>
+
+  # --- Credenciales de Meta (pon "pendiente" mientras estés en mock) ---
   - WHATSAPP_ACCESS_TOKEN=<token permanente de Meta>
   - WHATSAPP_PHONE_NUMBER_ID=<phone number id>
   - WHATSAPP_API_VERSION=v21.0
-  # Necesario para que las expresiones puedan leer $env:
+
+  # --- Obligatorio: sin esto las expresiones no pueden leer $env ---
   - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+
+  # --- Zona horaria de los Schedule Triggers ---
+  - GENERIC_TIMEZONE=America/Cancun
+  - TZ=America/Cancun
+
+  # --- Purgado: imprescindible con un trigger cada minuto ---
+  - EXECUTIONS_DATA_PRUNE=true
+  - EXECUTIONS_DATA_MAX_AGE=168          # 7 días
+  - EXECUTIONS_DATA_PRUNE_MAX_COUNT=10000
+  # Las ejecuciones sin nada que hacer (count: 0) son la inmensa mayoría.
+  # Guardar sólo los errores reduce el volumen en ~99%:
+  - EXECUTIONS_DATA_SAVE_ON_SUCCESS=none
+  - EXECUTIONS_DATA_SAVE_ON_ERROR=all
 ```
+
+> Deja `EXECUTIONS_DATA_SAVE_ON_SUCCESS=all` mientras estés probando, y
+> cámbialo a `none` cuando el workflow ya funcione. Si no, en una semana
+> tienes 10.000 ejecuciones vacías enterrando las que sí importan.
 
 ```bash
 docker compose up -d
