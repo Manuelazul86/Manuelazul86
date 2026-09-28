@@ -33,7 +33,12 @@ sistema completo sin tener nada de Meta: los envíos se simulan y quedan
 marcados con un id `wamid.MOCK-…`.
 
 Para que algo funcione de verdad necesitas, como mínimo, un proyecto de
-Supabase con las migraciones aplicadas → [`docs/SUPABASE_SETUP.md`](docs/SUPABASE_SETUP.md).
+Supabase con el esquema instalado. La instalación completa es **un solo
+copy-paste** de [`supabase/setup-all.sql`](supabase/setup-all.sql) en el
+SQL Editor de Supabase.
+
+La checklist completa, fase por fase, está en
+**[`docs/PASO_A_PASO.md`](docs/PASO_A_PASO.md)**.
 
 ## Comandos
 
@@ -79,6 +84,7 @@ Es el requisito central, y está defendido en cuatro capas:
 
 | Documento | Para qué |
 |---|---|
+| **[PASO_A_PASO](docs/PASO_A_PASO.md)** | **Empieza aquí: de cero a enviando** |
 | [ARCHITECTURE](docs/ARCHITECTURE.md) | Cómo encaja todo y por qué |
 | [SUPABASE_SETUP](docs/SUPABASE_SETUP.md) | Crear el proyecto y aplicar migraciones |
 | [WHATSAPP_SETUP](docs/WHATSAPP_SETUP.md) | Credenciales de Meta, webhook, regla de 24 h |
