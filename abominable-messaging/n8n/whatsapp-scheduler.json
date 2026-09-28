@@ -1,0 +1,277 @@
+{
+  "name": "Abominable Messaging — WhatsApp Scheduler",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "minutes", "minutesInterval": 1 }]
+        }
+      },
+      "id": "a1000000-0000-4000-8000-000000000001",
+      "name": "Every minute",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-420, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.ABOMINABLE_APP_URL }}/api/n8n/messages/claim",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.ABOMINABLE_N8N_SECRET }}"
+            },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"limit\": 25, \"worker\": \"n8n-main\"}",
+        "options": {
+          "timeout": 20000,
+          "response": { "response": { "neverError": false } }
+        }
+      },
+      "id": "a1000000-0000-4000-8000-000000000002",
+      "name": "Claim due messages",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-200, 0],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "notes": "Atomic: scheduled -> processing. A second concurrent execution receives the rows this one did NOT take, so a message is never handed out twice."
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "data.messages",
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000003",
+      "name": "Split messages",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [20, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "version": 2 },
+          "conditions": [
+            {
+              "id": "is-template",
+              "leftValue": "={{ $json.message_type }}",
+              "rightValue": "template",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000004",
+      "name": "Template or text?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [240, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/{{ $env.WHATSAPP_API_VERSION || 'v21.0' }}/{{ $env.WHATSAPP_PHONE_NUMBER_ID }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.WHATSAPP_ACCESS_TOKEN }}"
+            },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ messaging_product: 'whatsapp', recipient_type: 'individual', to: $json.phone, type: 'template', template: { name: $json.template_name, language: { code: $json.template_language }, components: Object.keys($json.template_variables || {}).length ? [{ type: 'body', parameters: Object.keys($json.template_variables).sort((a,b) => Number(a) - Number(b)).map(k => ({ type: 'text', text: String($json.template_variables[k]) })) }] : undefined } }) }}",
+        "options": {
+          "timeout": 20000,
+          "response": { "response": { "neverError": true, "fullResponse": true } }
+        }
+      },
+      "id": "a1000000-0000-4000-8000-000000000005",
+      "name": "Send template",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [480, -140],
+      "onError": "continueRegularOutput",
+      "notes": "neverError + fullResponse so a 4xx/5xx flows into the router instead of aborting the item. NEVER enable retryOnFail here: a retry could deliver the message twice."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/{{ $env.WHATSAPP_API_VERSION || 'v21.0' }}/{{ $env.WHATSAPP_PHONE_NUMBER_ID }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.WHATSAPP_ACCESS_TOKEN }}"
+            },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ messaging_product: 'whatsapp', recipient_type: 'individual', to: $json.phone, type: 'text', text: { preview_url: false, body: $json.body } }) }}",
+        "options": {
+          "timeout": 20000,
+          "response": { "response": { "neverError": true, "fullResponse": true } }
+        }
+      },
+      "id": "a1000000-0000-4000-8000-000000000006",
+      "name": "Send text",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [480, 140],
+      "onError": "continueRegularOutput",
+      "notes": "Same rules as Send template: never retry an outbound send."
+    },
+    {
+      "parameters": {
+        "jsCode": "/*\n * Normalise the Cloud API response into a single shape the two\n * report nodes can consume, and decide whether the error is worth\n * another attempt.\n *\n * The claim_token is carried through from the claim step: without it\n * the app will refuse to record the outcome.\n */\nconst PERMANENT = new Set([100, 131008, 131009, 131026, 131047, 131051, 132000, 132001, 132005, 132007, 132012, 133010, 190]);\nconst TRANSIENT = new Set([1, 2, 4, 80007, 130429, 131000, 131016, 133016]);\n\nconst out = [];\n\nfor (const item of $input.all()) {\n  const claimed = $('Split messages').itemMatching(item.pairedItem?.item ?? 0).json;\n  const response = item.json;\n  const status = response.statusCode ?? 0;\n  const body = response.body ?? {};\n\n  const providerMessageId = body?.messages?.[0]?.id ?? null;\n\n  if (status >= 200 && status < 300 && providerMessageId) {\n    out.push({ json: { ok: true, message_id: claimed.id, claim_token: claimed.claim_token, provider_message_id: providerMessageId } });\n    continue;\n  }\n\n  const code = body?.error?.code;\n  let retryable;\n  if (TRANSIENT.has(code)) retryable = true;\n  else if (PERMANENT.has(code)) retryable = false;\n  else if (status === 429 || status >= 500) retryable = true;\n  else if (status >= 400) retryable = false;\n  else retryable = true;\n\n  out.push({ json: {\n    ok: false,\n    message_id: claimed.id,\n    claim_token: claimed.claim_token,\n    error_code: code !== undefined ? String(code) : `http_${status}`,\n    error_message: String(body?.error?.error_data?.details ?? body?.error?.message ?? 'Unknown WhatsApp error').slice(0, 2000),\n    retryable,\n  } });\n}\n\nreturn out;"
+      },
+      "id": "a1000000-0000-4000-8000-000000000007",
+      "name": "Normalise result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "version": 2 },
+          "conditions": [
+            {
+              "id": "succeeded",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000008",
+      "name": "Sent or failed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [940, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.ABOMINABLE_APP_URL }}/api/n8n/messages/sent",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.ABOMINABLE_N8N_SECRET }}"
+            },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ message_id: $json.message_id, claim_token: $json.claim_token, provider_message_id: $json.provider_message_id }) }}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "a1000000-0000-4000-8000-000000000009",
+      "name": "Report sent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1180, -120],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "Safe to retry: the app keys this on the claim token, so a repeated confirmation is a no-op."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.ABOMINABLE_APP_URL }}/api/n8n/messages/failed",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.ABOMINABLE_N8N_SECRET }}"
+            },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ message_id: $json.message_id, claim_token: $json.claim_token, error_code: $json.error_code, error_message: $json.error_message, retryable: $json.retryable }) }}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "a1000000-0000-4000-8000-00000000000a",
+      "name": "Report failed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1180, 120],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "The APP decides whether another attempt happens — n8n only reports the error. That keeps the retry budget in one place."
+    }
+  ],
+  "connections": {
+    "Every minute": {
+      "main": [[{ "node": "Claim due messages", "type": "main", "index": 0 }]]
+    },
+    "Claim due messages": {
+      "main": [[{ "node": "Split messages", "type": "main", "index": 0 }]]
+    },
+    "Split messages": {
+      "main": [[{ "node": "Template or text?", "type": "main", "index": 0 }]]
+    },
+    "Template or text?": {
+      "main": [
+        [{ "node": "Send template", "type": "main", "index": 0 }],
+        [{ "node": "Send text", "type": "main", "index": 0 }]
+      ]
+    },
+    "Send template": {
+      "main": [[{ "node": "Normalise result", "type": "main", "index": 0 }]]
+    },
+    "Send text": {
+      "main": [[{ "node": "Normalise result", "type": "main", "index": 0 }]]
+    },
+    "Normalise result": {
+      "main": [[{ "node": "Sent or failed?", "type": "main", "index": 0 }]]
+    },
+    "Sent or failed?": {
+      "main": [
+        [{ "node": "Report sent", "type": "main", "index": 0 }],
+        [{ "node": "Report failed", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "executionTimeout": 120
+  },
+  "pinData": {},
+  "tags": [{ "name": "abominable" }, { "name": "whatsapp" }],
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "description": "Claims due messages from Abominable Messaging, sends them through the official WhatsApp Business Cloud API and reports the outcome back. All credentials come from n8n environment variables — no secrets are stored in this file."
+  }
+}
