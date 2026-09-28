@@ -1,0 +1,8 @@
+# Root-level ignores. Project-specific rules live in each project's own
+# .gitignore (e.g. abominable-messaging/.gitignore).
+.DS_Store
+
+# Never commit real secrets from anywhere in the repo.
+.env
+.env.*
+!.env.example
